@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>recorder shell</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { width: 1920px; height: 1080px; overflow: hidden; background: #EDEEF2; position: relative;
+         font-family: "PingFang SC", "Hiragino Sans GB", sans-serif; }
+
+  /* 镜头层：慢推 / 定点特写 都作用在这层 */
+  #vp { position: absolute; inset: 0; transform-origin: 960px 540px; will-change: transform; }
+  #fr { width: 1920px; height: 1080px; border: 0; display: block; background: #F4F5F7; }
+
+  /* 标题卡层：永远盖在 iframe 之上，导航期间不透出任何内容帧 */
+  #cardL { position: absolute; inset: 0; z-index: 50; pointer-events: none;
+           opacity: 0; transition: opacity .5s ease; background: #F4F5F7; }
+  #cardL.show { opacity: 1; }
+
+  /* 光标层 */
+  #cur { position: absolute; left: 0; top: 0; width: 28px; height: 28px; margin: -14px 0 0 -14px;
+         border-radius: 50%; z-index: 80; pointer-events: none;
+         background: rgba(28, 42, 78, .28); border: 1.5px solid rgba(255,255,255,.95);
+         box-shadow: 0 2px 12px rgba(15,25,55,.4), inset 0 0 5px rgba(255,255,255,.4);
+         transform: translate(960px, 540px); transition: opacity .3s; }
+  #cur::after { content: ""; position: absolute; left: 50%; top: 50%; width: 5px; height: 5px;
+                margin: -2.5px; border-radius: 50%; background: #fff; }
+  #cur .pulse { position: absolute; inset: -4px; border-radius: 50%; border: 2px solid rgba(44,78,146,.7);
+                opacity: 0; }
+  @keyframes pulse { 0% { transform: scale(.6); opacity: .9; } 100% { transform: scale(1.8); opacity: 0; } }
+
+  /* 胶囊字幕 */
+  #subWrap { position: absolute; left: 0; right: 0; bottom: 44px; display: flex; justify-content: center;
+             z-index: 70; pointer-events: none; }
+  #sub { display: inline-flex; align-items: center; gap: 13px; max-width: 1380px;
+         padding: 15px 36px 15px 26px; border-radius: 999px; opacity: 0; transition: opacity .32s;
+         background: rgba(255,255,255,.82); border: 1px solid rgba(20,30,60,.1);
+         backdrop-filter: blur(22px) saturate(150%); -webkit-backdrop-filter: blur(22px) saturate(150%);
+         box-shadow: 0 12px 38px rgba(15,25,55,.18), inset 0 1px 0 rgba(255,255,255,.9);
+         font-size: 25px; font-weight: 500; line-height: 1.5; color: #191A20;
+         letter-spacing: 1.2px; white-space: nowrap; }
+  #sub::before { content: ""; width: 9px; height: 9px; border-radius: 50%; flex: none;
+                 background: linear-gradient(135deg, #2C4E92, #D4AF5A); }
+</style>
+</head>
+<body>
+  <div id="vp"><iframe id="fr"></iframe></div>
+  <div id="cardL"></div>
+  <div id="subWrap"><div id="sub"></div></div>
+  <div id="cur"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const ez = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+let cx = 960, cy = 540;
+
+window.SHELL = {
+  /* 导航：调用前请先 card() 盖住 */
+  nav(url) {
+    return new Promise(res => {
+      const fr = $('fr');
+      fr.onload = () => setTimeout(res, 60);
+      fr.src = url;
+    });
+  },
+
+  /* 标题卡 */
+  card(html, dark = false) {
+    const c = $('cardL');
+    c.style.background = dark ? '#0A0A0B' : '#F4F5F7';
+    c.innerHTML = html;
+    c.classList.add('show');
+  },
+  cardHide(ms = 600) {
+    const c = $('cardL');
+    c.style.transition = `opacity ${ms}ms ease`;
+    c.classList.remove('show');
+  },
+
+  /* 胶囊字幕 */
+  sub(t) {
+    const s = $('sub');
+    s.style.opacity = 0;
+    setTimeout(() => { s.textContent = t; s.style.opacity = 1; }, 200);
+  },
+  subHide() { $('sub').style.opacity = 0; },
+
+  /* 光标：rAF 缓动（单次调用走完全程，负载免疫） */
+  cursor(x, y, ms) {
+    return new Promise(done => {
+      const [x0, y0] = [cx, cy], t0 = performance.now();
+      (function f() {
+        const p = Math.min(1, (performance.now() - t0) / ms);
+        const e = ez(p);
+        cx = x0 + (x - x0) * e; cy = y0 + (y - y0) * e;
+        $('cur').style.transform = `translate(${cx}px,${cy}px)`;
+        p < 1 ? requestAnimationFrame(f) : done();
+      })();
+    });
+  },
+  cursorShow(on) { $('cur').style.opacity = on ? 1 : 0; },
+  clickFx() {
+    const p = document.createElement('div');
+    p.className = 'pulse';
+    p.style.animation = 'pulse .5s ease-out forwards';
+    $('cur').appendChild(p);
+    setTimeout(() => p.remove(), 550);
+  },
+
+  /* 镜头：scale=1 复位；origin 为画面坐标 */
+  cam(scale, ox = 960, oy = 540, ms = 800, curve = 'cubic-bezier(.3,.05,.25,1)') {
+    const v = $('vp');
+    v.style.transformOrigin = `${ox}px ${oy}px`;
+    v.style.transition = ms ? `transform ${ms}ms ${curve}` : 'none';
+    v.style.transform = `scale(${scale})`;
+  },
+};
+</script>
+</body>
+</html>
