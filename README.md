@@ -45,13 +45,27 @@ node tts.mjs && node record.mjs && node build.mjs   # → out/final.mp4
 | `record.mjs` | 产品地址、各章操作脚本（选择器）、特写锚点 `mark()` |
 | `build.mjs` | 特写裁切区域坐标 |
 
+## 两套架构
+
+- **方案A · 分章节段落式**（`templates/`）：每章独立录制，ffmpeg 拼接。通用，章节可独立重录。
+- **方案B · 壳+iframe 连续单镜**（`templates/shell/`）：标题卡/字幕/光标/镜头层常驻录制壳，产品页在 iframe 里换——**转场零闪帧**（换页永远发生在卡片底下），慢推/特写是 CSS 镜头层实时录制（无 zoompan、无 4K 超采样、无对位），胶囊字幕直接录进画面。要求产品页可被 iframe 嵌入。标题卡多、特写多、转场要求严丝合缝时优先选 B。
+
 ## 坑库（本 skill 最值钱的部分，详见 SKILL.md）
 
-1. `zoompan` 直接在 1080p 推镜会**持续抖动** → 必须先 4K 超采样
+1. `zoompan` 直接在 1080p 推镜会**持续抖动** → 必须先 4K 超采样（或用方案B根除）
 2. 外部步进移动光标有阶梯感 → 页面内 `requestAnimationFrame` 补间
 3. 页面加载耗时波动会让特写时间窗裁偏 → 录制时打时间锚点（marks.json）
 4. Homebrew ffmpeg 常缺 libass/drawtext → 字幕用透明 PNG `overlay` 烧录
-5. 章节时长公式、字幕按字数配时、抽帧自验流程……
+5. `locator.boundingBox()` 会等"元素稳定"——页面有无限 CSS 动画时定位静止按钮也干等数秒 → `getBoundingClientRect` 即时取值
+6. 协议往返开销在高 CPU 负载下失控（实测同脚本 217s→339s 漂移）→ 连续动画单次 evaluate 进页面 rAF 走完，node 侧只做台词粒度 wall-clock 等待
+7. `addInitScript` 在 document-start 注入的 DOM 会被解析器**静默丢弃**（documentElement 是占位节点）→ 等 DOMContentLoaded 再挂
+8. 录制路径必须确定性：真模型/真网络双轨逻辑录前切 mock；闪帧检查要用转场窗口 `fps=8` 连拍 contact sheet，单点抽帧抓不到
+9. 章节时长公式、字幕按字数配时、抽帧自验流程……
+
+## 配音与闪避（v2 实测沉淀）
+
+- 音色升级档：MiniMax `t2a_v2`（speech-02-hd · female-chengshu · speed 0.95），自然度高于 Edge-TTS 一档，hex 音频解码落盘
+- BGM 闪避落地参数：人声作 sidechain key，BGM 预增益 +25%，`threshold .012 / ratio 20 / attack 25ms / release 420ms`，总线 limiter 0.9
 
 ## License
 
