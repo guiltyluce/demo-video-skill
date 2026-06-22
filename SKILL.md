@@ -51,7 +51,7 @@ ffmpeg -hide_banner -filters | grep -E "drawtext|subtitles"   # 见坑#4
 2. **光标卡顿**：不要用 node 侧循环步进移动光标（25fps 阶梯感）。视觉光标用页面内 `requestAnimationFrame` 补间（`window.__vcGlide`），真实 mouse.move 只需 5 步维持 hover。
 3. **页面加载漂移**：录像从 context 创建即开始，`goto` 的网络耗时（2~4s 且波动）会让所有动作时刻后移。**特写/对位时间窗绝不能写死**，必须用录制时的 `mark()` 锚点（写入 marks.json，build 读取）。
 4. **ffmpeg 可能没有 subtitles/drawtext 滤镜**（homebrew 版常缺 libass）。字幕方案：Playwright 把每句渲染成 1920×120 透明 PNG（胶囊样式，`omitBackground: true`），ffmpeg 多输入 `overlay=...:enable='between(t,a,b)'` 链式烧录。效果比 libass 更可控。
-5. **章节时长公式**：`dur = 旁白时长 + lead + 1.1`（lead：卡片 0.6 / 录屏 0.4，即旁白 adelay）。录制 hold = 旁白 + 1.6，保证素材永远够剪。
+5. **章节时长公式**：`dur = 旁白时长 + lead + 1.1`（lead：卡片 0.6 / 录屏 0.4，即旁白 adelay）。录制 hold 从 `mark("ready")` 起算：`ready + dur + 1.0s` 缓冲（见坑#14），保证 build 裁切不越界、素材永远够剪。
 6. **字幕时间**：按句子字数比例分配章内旁白时长，误差 <0.5s，性价比远高于逐句 TTS。
 7. **headless Chrome 桌面模式最小布局宽 500px**：截图验证移动端必须 `--window-size=500` 起，否则右侧被裁产生假 bug。
 8. **抽帧自验**：合成后必须 `ffmpeg -ss <t> -i final.mp4 -frames:v 1` 抽关键帧（标题卡/字幕/特写/每章中段）用 Read 查看，不能只看命令成功。特写帧时刻 = 前序章节时长累加 + marks 锚点 + 0.4。**转场专项**：对每个转场窗口 `fps=8` 连抽 3 秒拼成 contact sheet（PIL 拼图）逐帧查闪帧——闪帧只存在 1-2 帧，单点抽帧根本抓不到。
@@ -59,6 +59,8 @@ ffmpeg -hide_banner -filters | grep -E "drawtext|subtitles"   # 见坑#4
 10. **协议往返在高 CPU 负载下失控**：node 侧每帧一次 `mouse.move`+`waitForTimeout` 的循环，单次往返开销在负载高时从几 ms 涨到几十 ms，实测同一脚本录制总长 217s→339s 随机漂移。所有连续动画（光标缓动）必须**单次 evaluate 进页面用 rAF 走完**，node 侧只在台词粒度上做 wall-clock 等待——wall-clock 等待是负载免疫的。
 11. **`addInitScript` 在 document-start 注入 DOM 会被静默丢弃**：那一刻的 documentElement 是占位节点，解析器随后整个替换它——挂上去的幕布/覆盖层"看起来注入成功"但从未显示。必须等 `DOMContentLoaded` 再 append（或直接用方案B，壳层元素不随导航销毁）。
 12. **录制路径必须确定性**：产品里有"真模型/真网络 + 超时回落"的双轨逻辑时，录前把本地 AI 服务关掉走 mock 路径（或 deep-link 固定状态），否则结果时长/文案每次都不同，且可能录进"服务未就绪"提示。同理，所有页面要支持 `?theme=`/`?view=` 等 deep-link 参数——发现哪个页面不支持就先给产品补上再录。
+13. **字幕只显示前几句、后面全无**：链式 overlay 的字幕图用单帧 `-i sub.png`（不循环）时，只有最前面几张能显示——这是"字幕中途消失"的根因。每张必须 `-loop 1 -i sub.png`（作连续流），终混加 `-shortest` 由 `full.mp4` 决定总长。另：字幕时间要**铺满整章** `[offset, offset+dur]`（首末贴合章节边界、句间无空档），否则每章尾部 1s 无字幕。
+14. **每段开头白屏 + 旁白比画面早 2~3s**：录像从 `context` 创建即开始，含 `goto` 的页面加载（白屏 4~8s 且波动），直接 `-t dur` 会把白屏剪进段首，且旁白（adelay 固定）相对画面整体提前。修复：`installCursor` 后打 `mark("ready")`，build 对每个录屏段用 `trim=ready:ready+dur` 从就绪处裁切（特写锚点 `cuFrom` 也要减去 `ready`）。顺带把旁白和画面对齐了。
 
 ## 风格要素（"苹果感"从哪来）
 

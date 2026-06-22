@@ -18,10 +18,12 @@ const closeupZone = {
   agent: { x: 950, y: 240, w: 960, h: 540 },   // 智能体数据卡
   ingest: { x: 470, y: 110, w: 960, h: 540 }   // 解析卡口径提问
 };
+const readyAt = (id) => marks[id]?.ready || 0; // 每章应用就绪时刻（裁掉开头白屏加载）
 const closeups = {};
 for (const [id, zone] of Object.entries(closeupZone)) {
   const at = marks[id]?.cuFrom;
-  if (at) closeups[id] = { from: +(at + 0.4).toFixed(2), to: +(at + 4.0).toFixed(2), ...zone };
+  const rd = readyAt(id);
+  if (at) closeups[id] = { from: +(at - rd + 0.4).toFixed(2), to: +(at - rd + 4.0).toFixed(2), ...zone };
 }
 
 const segs = [];
@@ -45,17 +47,19 @@ for (const ch of chapters) {
     );
   } else {
     const cu = closeups[ch.id];
+    const rd = readyAt(ch.id); // 从应用就绪处裁切，去掉开头白屏加载（并对齐旁白）
+    const trimHead = `trim=${rd.toFixed(2)}:${(rd + dur).toFixed(2)},setpts=PTS-STARTPTS`;
     let vchain;
     if (cu) {
-      // 三明治：正常 → 定点放大 → 正常（各段独立慢推）
+      // 三明治：正常 → 定点放大 → 正常（各段独立慢推）；先裁掉白屏
       vchain =
-        `[0:v]fps=${FPS},scale=1920:1080,split=3[s0][s1][s2];` +
+        `[0:v]${trimHead},fps=${FPS},scale=1920:1080,split=3[s0][s1][s2];` +
         `[s0]trim=0:${cu.from},setpts=PTS-STARTPTS,${PUSH}[p0];` +
         `[s1]trim=${cu.from}:${cu.to},setpts=PTS-STARTPTS,crop=${cu.w}:${cu.h}:${cu.x}:${cu.y},${PUSH}[p1];` +
         `[s2]trim=${cu.to},setpts=PTS-STARTPTS,${PUSH}[p2];` +
         `[p0][p1][p2]concat=n=3:v=1:a=0,${vfade},format=yuv420p[v]`;
     } else {
-      vchain = `[0:v]fps=${FPS},${PUSH},${vfade},format=yuv420p[v]`;
+      vchain = `[0:v]${trimHead},fps=${FPS},${PUSH},${vfade},format=yuv420p[v]`;
     }
     run(
       `ffmpeg -y -v error -i out/raw/${ch.id}.webm -i out/narr-${ch.id}.mp3 ` +
@@ -64,14 +68,16 @@ for (const ch of chapters) {
     );
   }
 
-  // 字幕：句按字数比例分配本章旁白时长
+  // 字幕：全程覆盖本章（按字数比例铺满 [offset, offset+dur]，首末贴合章节边界，句间无空档）
   const totalChars = ch.subs.reduce((s, x) => s + x.length, 0);
-  let t = offset + lead;
-  for (const line of ch.subs) {
-    const d = (narr * line.length) / totalChars;
-    subEvents.push({ text: line, start: +t.toFixed(2), end: +(t + d - 0.12).toFixed(2) });
-    t += d;
-  }
+  let acc = offset;
+  ch.subs.forEach((line, idx) => {
+    const d = (dur * line.length) / totalChars;
+    const start = acc;
+    acc += d;
+    const end = idx === ch.subs.length - 1 ? offset + dur : acc;
+    subEvents.push({ text: line, start: +start.toFixed(2), end: +end.toFixed(2) });
+  });
 
   segs.push(outSeg);
   offset += dur;
@@ -122,7 +128,9 @@ console.log("bgm.wav (120BPM tech ambient)");
 
 // 终混：字幕 overlay 烧录 + BGM 人声闪避
 {
-  const subInputs = subEvents.map((_, i) => `-i out/subs/sub-${i}.png`).join(" ");
+  // -loop 1：每张字幕图作为连续流。单帧图（不循环）在链式 overlay 下只有前几张能显示 →
+  // 字幕中途消失的根因。配合终混的 -shortest 由 full.mp4 决定总长。
+  const subInputs = subEvents.map((_, i) => `-loop 1 -i out/subs/sub-${i}.png`).join(" ");
   let chain = "";
   let prev = "0:v";
   subEvents.forEach((e, i) => {
@@ -135,7 +143,7 @@ console.log("bgm.wav (120BPM tech ambient)");
     `-filter_complex "${chain}` +
     `[1:a][0:a]sidechaincompress=threshold=0.02:ratio=10:attack=60:release=800:makeup=1[duck];` +
     `[0:a][duck]amix=inputs=2:normalize=0:weights='1 0.45',alimiter=limit=0.95[mix]" ` +
-    `-map "[v]" -map "[mix]" -c:v libx264 -preset medium -crf 19 -c:a aac -b:a 192k out/final.mp4`
+    `-map "[v]" -map "[mix]" -shortest -c:v libx264 -preset medium -crf 19 -c:a aac -b:a 192k out/final.mp4`
   );
 }
 console.log(`✓ out/final.mp4 (${offset.toFixed(1)}s, 字幕+特写+节奏BGM)`);

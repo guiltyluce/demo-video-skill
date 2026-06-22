@@ -148,7 +148,6 @@ for (const ch of chapters.filter(c => c.type === "card")) {
 }
 
 for (const ch of chapters.filter(c => c.type === "record")) {
-  const holdMs = (durations[ch.id] + 1.6) * 1000;
   const context = await browser.newContext({
     viewport: { width: 1920, height: 1080 },
     recordVideo: { dir: "out/raw", size: { width: 1920, height: 1080 } }
@@ -162,13 +161,17 @@ for (const ch of chapters.filter(c => c.type === "record")) {
   await page.goto(startUrl[ch.id], { waitUntil: "networkidle", timeout: 60000 });
   await installCursor(page);
   cx = 960; cy = 540;
+  await sleep(300);
+  mark("ready"); // 应用已渲染：build 从这里裁切，去掉开头白屏加载，并对齐旁白
   try {
     await actions[ch.id](page, mark);
   } catch (err) {
     console.error(`${ch.id} action error:`, err.message);
   }
   allMarks[ch.id] = chMarks;
-  const remain = holdMs - (Date.now() - t0);
+  // 录满：就绪时刻 + 该章成片时长(dur = narr + lead0.4 + 1.1) + 1.0s 缓冲，保证 build 裁切不越界
+  const needS = chMarks.ready + durations[ch.id] + 1.5 + 1.0;
+  const remain = needS * 1000 - (Date.now() - t0);
   if (remain > 0) await sleep(remain);
   const video = page.video();
   await context.close();
